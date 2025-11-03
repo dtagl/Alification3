@@ -15,32 +15,30 @@ public class AdminController : ControllerBase
 
     private async Task<bool> IsAdmin(Guid requesterId)
     {
-        var u = await _context.Users.FindAsync(requesterId);
-        return u != null && u.Role == Role.Admin;
+        var user = await _context.Users.FindAsync(requesterId);
+        return user is { Role: Role.Admin };
     }
 
     // ---------------------------
-    // ✅ Статистика компании
+    // ✅ 1. Company overview
     // ---------------------------
-    [HttpGet("stats/{companyId:guid}")]
-    public async Task<IActionResult> GetStats(Guid companyId, [FromQuery] Guid requesterId)
+    [HttpGet("overview/{companyId:guid}")]
+    public async Task<IActionResult> GetCompanyOverview(Guid companyId, [FromQuery] Guid requesterId)
     {
         if (!await IsAdmin(requesterId)) return Forbid();
 
-        var company = await _context.Companies.FindAsync(companyId);
-        if (company == null) return NotFound("Company not found.");
-
-        var now = DateTime.UtcNow;
         var totalRooms = await _context.Rooms.CountAsync(r => r.CompanyId == companyId);
         var totalUsers = await _context.Users.CountAsync(u => u.CompanyId == companyId);
-        var totalBookings = await _context.Bookings.Include(b => b.Room)
+        var totalBookings = await _context.Bookings
+            .Include(b => b.Room)
             .CountAsync(b => b.Room.CompanyId == companyId);
-        var activeBookings = await _context.Bookings.Include(b => b.Room)
-            .CountAsync(b => b.Room.CompanyId == companyId && b.EndAt > now);
+
+        var activeBookings = await _context.Bookings
+            .Include(b => b.Room)
+            .CountAsync(b => b.Room.CompanyId == companyId && b.EndAt > DateTime.UtcNow);
 
         return Ok(new
         {
-            company.Name,
             totalRooms,
             totalUsers,
             totalBookings,
@@ -49,177 +47,102 @@ public class AdminController : ControllerBase
     }
 
     // ---------------------------
-    // ✅ CRUD: Комнаты
+    // ✅ 2. Room utilization (percentage of booked time)
     // ---------------------------
-    [HttpPost("room")]
-    public async Task<IActionResult> CreateRoom([FromBody] AdminCreateRoomDto dto)
-    {
-        if (!await IsAdmin(dto.RequesterId)) return Forbid();
-
-        var room = new Room
-        {
-            Name = dto.Name,
-            Capacity = dto.Capacity,
-            Description = dto.Description,
-            CompanyId = dto.CompanyId
-        };
-        _context.Rooms.Add(room);
-        await _context.SaveChangesAsync();
-        return Ok(room);
-    }
-
-    [HttpPut("room/{roomId:guid}")]
-    public async Task<IActionResult> UpdateRoom(Guid roomId, [FromBody] AdminUpdateRoomDto dto)
-    {
-        if (!await IsAdmin(dto.RequesterId)) return Forbid();
-
-        var room = await _context.Rooms.FindAsync(roomId);
-        if (room == null) return NotFound();
-
-        room.Name = dto.Name ?? room.Name;
-        room.Capacity = dto.Capacity ?? room.Capacity;
-        room.Description = dto.Description ?? room.Description;
-
-        await _context.SaveChangesAsync();
-        return Ok(room);
-    }
-
-    [HttpDelete("room/{roomId:guid}")]
-    public async Task<IActionResult> DeleteRoom(Guid roomId, [FromQuery] Guid requesterId)
+    [HttpGet("room-utilization/{companyId:guid}")]
+    public async Task<IActionResult> GetRoomUtilization(Guid companyId, [FromQuery] Guid requesterId)
     {
         if (!await IsAdmin(requesterId)) return Forbid();
 
-        var room = await _context.Rooms.FindAsync(roomId);
-        if (room == null) return NotFound();
-
-        _context.Rooms.Remove(room);
-        await _context.SaveChangesAsync();
-        return Ok();
-    }
-
-    [HttpGet("rooms/{companyId:guid}")]
-    public async Task<IActionResult> GetRooms(Guid companyId, [FromQuery] Guid requesterId)
-    {
-        if (!await IsAdmin(requesterId)) return Forbid();
-
-        var rooms = await _context.Rooms.Where(r => r.CompanyId == companyId).ToListAsync();
-        return Ok(rooms);
-    }
-
-    // ---------------------------
-    // ✅ CRUD: Пользователи
-    // ---------------------------
-    [HttpGet("users/{companyId:guid}")]
-    public async Task<IActionResult> GetUsers(Guid companyId, [FromQuery] Guid requesterId)
-    {
-        if (!await IsAdmin(requesterId)) return Forbid();
-
-        var users = await _context.Users.Where(u => u.CompanyId == companyId)
-            .Select(u => new { u.Id, u.UserName, u.TelegramId, u.Role })
+        var rooms = await _context.Rooms
+            .Where(r => r.CompanyId == companyId)
+            .Include(r => r.Bookings)
             .ToListAsync();
-        return Ok(users);
-    }
 
-    [HttpDelete("user/{userId:guid}")]
-    public async Task<IActionResult> DeleteUser(Guid userId, [FromQuery] Guid requesterId)
-    {
-        if (!await IsAdmin(requesterId)) return Forbid();
+        var stats = rooms.Select(r =>
+        {
+            var totalHours = 8 * 5; // workweek baseline 8h x 5 days
+            var bookedHours = r.Bookings
+                .Where(b => b.StartAt >= DateTime.UtcNow.AddDays(-7))
+                .Sum(b => (b.EndAt - b.StartAt).TotalHours);
 
-        var user = await _context.Users.FindAsync(userId);
-        if (user == null) return NotFound();
+            return new
+            {
+                Room = r.Name,
+                UtilizationPercent = Math.Round(bookedHours / totalHours * 100, 2)
+            };
+        });
 
-        _context.Users.Remove(user);
-        await _context.SaveChangesAsync();
-        return Ok();
-    }
-
-    [HttpPut("user/{userId:guid}/role")]
-    public async Task<IActionResult> ChangeUserRole(Guid userId, [FromBody] ChangeRoleDto dto)
-    {
-        if (!await IsAdmin(dto.RequesterId)) return Forbid();
-
-        var user = await _context.Users.FindAsync(userId);
-        if (user == null) return NotFound();
-
-        user.Role = dto.NewRole;
-        await _context.SaveChangesAsync();
-        return Ok(new { user.Id, user.UserName, user.Role });
+        return Ok(stats);
     }
 
     // ---------------------------
-    // ✅ CRUD: Брони
+    // ✅ 3. Top 5 most used rooms
     // ---------------------------
-    [HttpGet("bookings/{companyId:guid}")]
-    public async Task<IActionResult> GetCompanyBookings(Guid companyId, [FromQuery] Guid requesterId)
+    [HttpGet("top-rooms/{companyId:guid}")]
+    public async Task<IActionResult> GetTopRooms(Guid companyId, [FromQuery] Guid requesterId)
     {
         if (!await IsAdmin(requesterId)) return Forbid();
 
-        var bookings = await _context.Bookings
+        var topRooms = await _context.Bookings
+            .Include(b => b.Room)
+            .Where(b => b.Room.CompanyId == companyId)
+            .GroupBy(b => b.Room.Name)
+            .Select(g => new { Room = g.Key, Count = g.Count() })
+            .OrderByDescending(x => x.Count)
+            .Take(5)
+            .ToListAsync();
+
+        return Ok(topRooms);
+    }
+
+    // ---------------------------
+    // ✅ 4. User activity stats
+    // ---------------------------
+    [HttpGet("user-activity/{companyId:guid}")]
+    public async Task<IActionResult> GetUserActivity(Guid companyId, [FromQuery] Guid requesterId)
+    {
+        if (!await IsAdmin(requesterId)) return Forbid();
+
+        var activity = await _context.Bookings
             .Include(b => b.Room)
             .Include(b => b.User)
             .Where(b => b.Room.CompanyId == companyId)
-            .Select(b => new
+            .GroupBy(b => b.User.UserName)
+            .Select(g => new
             {
-                b.Id,
-                Room = b.Room.Name,
-                User = b.User.UserName,
-                b.StartAt,
-                b.EndAt
+                User = g.Key,
+                Bookings = g.Count(),
+                TotalHours = g.Sum(x => (x.EndAt - x.StartAt).TotalHours)
             })
-            .OrderByDescending(b => b.StartAt)
+            .OrderByDescending(x => x.Bookings)
             .ToListAsync();
 
-        return Ok(bookings);
+        return Ok(activity);
     }
 
-    [HttpDelete("booking/{bookingId:guid}")]
-    public async Task<IActionResult> DeleteBooking(Guid bookingId, [FromQuery] Guid requesterId)
+    // ---------------------------
+    // ✅ 5. Daily booking trends (last 7 days)
+    // ---------------------------
+    [HttpGet("bookings-trend/{companyId:guid}")]
+    public async Task<IActionResult> GetBookingTrends(Guid companyId, [FromQuery] Guid requesterId)
     {
         if (!await IsAdmin(requesterId)) return Forbid();
 
-        var booking = await _context.Bookings.FindAsync(bookingId);
-        if (booking == null) return NotFound();
+        var weekAgo = DateTime.UtcNow.AddDays(-7);
 
-        _context.Bookings.Remove(booking);
-        await _context.SaveChangesAsync();
-        return Ok();
-    }
+        var trend = await _context.Bookings
+            .Include(b => b.Room)
+            .Where(b => b.Room.CompanyId == companyId && b.StartAt >= weekAgo)
+            .GroupBy(b => b.StartAt.Date)
+            .Select(g => new
+            {
+                Date = g.Key,
+                Count = g.Count()
+            })
+            .OrderBy(x => x.Date)
+            .ToListAsync();
 
-    // ---------------------------
-    // ✅ Изменить пароль компании
-    // ---------------------------
-    [HttpPut("company/{companyId:guid}/password")]
-    public async Task<IActionResult> ChangePassword(Guid companyId, [FromBody] ChangePasswordDto dto)
-    {
-        if (!await IsAdmin(dto.RequesterId)) return Forbid();
-
-        var company = await _context.Companies.FindAsync(companyId);
-        if (company == null) return NotFound();
-
-        company.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
-        await _context.SaveChangesAsync();
-        return Ok("Password updated");
-    }
-
-    // ---------------------------
-    // ✅ Настройка рабочего времени
-    // ---------------------------
-    [HttpPut("company/{companyId:guid}/workhours")]
-    public async Task<IActionResult> SetWorkHours(Guid companyId, [FromBody] WorkHoursDto dto)
-    {
-        if (!await IsAdmin(dto.RequesterId)) return Forbid();
-
-        var company = await _context.Companies.FindAsync(companyId);
-        if (company == null) return NotFound();
-
-        // TODO: можно добавить в Company поля StartHour/EndHour
-        return Ok(new { companyId, dto.StartHour, dto.EndHour });
+        return Ok(trend);
     }
 }
-
-// DTOs (уникальные имена, без конфликтов)
-public record AdminCreateRoomDto(Guid CompanyId, Guid RequesterId, string Name, int Capacity, string Description);
-public record AdminUpdateRoomDto(Guid RequesterId, string? Name, int? Capacity, string? Description);
-public record ChangeRoleDto(Guid RequesterId, Role NewRole);
-public record ChangePasswordDto(Guid RequesterId, string NewPassword);
-public record WorkHoursDto(Guid RequesterId, int StartHour, int EndHour);
