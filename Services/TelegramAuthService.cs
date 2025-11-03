@@ -1,5 +1,8 @@
+// File: Services/TelegramAuthService.cs
 using System.Security.Cryptography;
 using System.Text;
+
+namespace Api.Services;
 
 public class TelegramAuthService
 {
@@ -7,21 +10,27 @@ public class TelegramAuthService
 
     public TelegramAuthService(IConfiguration config)
     {
-        _botToken = config["Telegram:BotToken"]!;
+        _botToken = config["Telegram:BotToken"] ?? string.Empty;
     }
 
+    // Validate Telegram login widget data dictionary (key -> value)
+    // Returns true if signature valid. Accepts pre-parsed dictionary (without "hash")
     public bool Validate(Dictionary<string, string> data)
     {
-        if (!data.TryGetValue("hash", out var hash))
-            return false;
-        data.Remove("hash");
+        if (string.IsNullOrEmpty(_botToken)) return false;
+        if (!data.TryGetValue("hash", out var hash)) return false;
 
-        var sorted = data.OrderBy(kv => kv.Key)
-            .Select(kv => $"{kv.Key}={kv.Value}");
-        var dataCheckString = string.Join("\n", sorted);
+        // Build data_check_string: sort keys (except hash), join "k=v\n"
+        var kv = data.Where(kv2 => kv2.Key != "hash")
+            .OrderBy(kv2 => kv2.Key)
+            .Select(kv2 => $"{kv2.Key}={kv2.Value}");
+        var dataCheck = string.Join("\n", kv);
 
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(SHA256Hash(_botToken)));
-        var computed = hmac.ComputeHash(Encoding.UTF8.GetBytes(dataCheckString));
+        // secret_key = sha256(bot_token)
+        var secretKey = SHA256Hash(_botToken);
+        // compute HMAC-SHA256(secret_key, data_check_string)
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secretKey));
+        var computed = hmac.ComputeHash(Encoding.UTF8.GetBytes(dataCheck));
         var hex = BitConverter.ToString(computed).Replace("-", "").ToLower();
 
         return hex == hash;

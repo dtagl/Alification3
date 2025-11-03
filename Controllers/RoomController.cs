@@ -1,118 +1,101 @@
-using Alification.Data.Entities;
+// File: Controllers/RoomController.cs
 using Api.Data;
+using Api.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Api.Controllers;
 
-
-//this controller is for booking(main) function
-[Controller]
-[Route("room")]
-public class RoomController:Controller
+[ApiController]
+[Route("api/rooms")]
+public class RoomController : ControllerBase
 {
-    private readonly TelegramAuthService _auth;
     private readonly MyContext _context;
+    public RoomController(MyContext context) => _context = context;
 
-
-    public RoomController(TelegramAuthService auth,MyContext context)
+    // List all rooms for a company
+    [HttpGet("company/{companyId:guid}")]
+    public async Task<IActionResult> GetCompanyRooms(Guid companyId)
     {
-        _auth = auth;
-        _context = context;
-    }
-    
-    
-    
-    //this is for getting list of time slots in that company in that room, should show only future slots(not to show yesterday in list)
-    /*
-     list will look like:
-     
-     27-june
-     28-june
-     30-june
-     ...
-     
-     and if user chooses date then there will be shown this timeslots:
-     1-room
-     27-june
-     9:00/9:15/9:30/9:45
-     -------------------
-     10:00/10:15/10:30/10:45
-     -------------------
-     ...
-     */
-    
-    [HttpGet("room/{RoomId}")]
-    public async Task<Dictionary<DateTime,bool>> GetTimespans(Guid @RoomId,[FromBody] DateTime date)
-    {
-        //shoud be updated and corected+added datecheck
-        var room = _context.Rooms.FirstOrDefault(r => r.Id == RoomId);
-        var company = _context.Companies.Where(c => c.Id == room.CompanyId).FirstOrDefault();
-
-        var bookings = _context.Bookings;
-        
-        var a = company.WorkingStart;
-        var b = company.WorkingEnd;
-
-        var workinghours = b - a;
-
-        var list = new Dictionary<DateTime, bool>();
-        for (DateTime i = a; i < b; a += TimeSpan.FromMinutes(15))
-        {
-            //there should be method to check if time is not in bookings if no then false if booked then true
-            list.Add(i,false);
-        }
-        return list;
+        var rooms = await _context.Rooms.Where(r => r.CompanyId == companyId)
+                                       .Select(r => new { r.Id, r.Name, r.Capacity, r.Description })
+                                       .ToListAsync();
+        return Ok(rooms);
     }
 
-    //this is for register booking
-    [HttpGet("register")]
-    public async Task RegisterBooking([FromBody] Guid RoomId,[FromBody] Guid UserId, [FromBody] DateTime time)
+    // Admin: create room
+    [HttpPost("create")]
+    public async Task<IActionResult> CreateRoom([FromBody] CreateRoomDto dto)
     {
-        var booking = new Booking()
+        if (dto == null) return BadRequest();
+        var company = await _context.Companies.FindAsync(dto.CompanyId);
+        if (company == null) return NotFound("Company not found.");
+
+        var room = new Room
         {
-            Id =new Guid(),
-            RoomId = RoomId,
-            UserId = UserId,
-            StartAt = time, 
-            EndAt = time+TimeSpan.FromMinutes(15)
+            Name = dto.Name,
+            Capacity = dto.Capacity,
+            Description = dto.Description,
+            CompanyId = dto.CompanyId
+        };
+        _context.Rooms.Add(room);
+        await _context.SaveChangesAsync();
+        return Ok(new { room.Id });
+    }
+
+    // Book a room (basic overlap check)
+    [HttpPost("{roomId:guid}/book")]
+    public async Task<IActionResult> BookRoom(Guid roomId, [FromBody] BookDto dto)
+    {
+        var room = await _context.Rooms.Include(r => r.Bookings).FirstOrDefaultAsync(r => r.Id == roomId);
+        if (room == null) return NotFound("Room not found.");
+
+        // Validate times
+        if (dto.StartAt >= dto.EndAt) return BadRequest("Invalid time range.");
+        // Optional: ensure within working hours e.g., 9:00-18:00 (server local)
+        // Check overlapping bookings
+        var overlap = room.Bookings.Any(b => !(dto.EndAt <= b.StartAt || dto.StartAt >= b.EndAt));
+        if (overlap) return Conflict("Time slot occupied.");
+
+        var booking = new Booking
+        {
+            RoomId = roomId,
+            UserId = dto.UserId,
+            StartAt = dto.StartAt,
+            EndAt = dto.EndAt,
+            TimespanId = ComputeTimespanId(dto.StartAt) // optional
         };
         _context.Bookings.Add(booking);
-        _context.SaveChanges();
+        await _context.SaveChangesAsync();
+        return Ok(new { booking.Id });
     }
 
-    //this is for showing info of users in booked timespans
-    public class GetBookedDto
+    // Cancel own booking (or admin can cancel any if extended)
+    [HttpDelete("booking/{bookingId:guid}")]
+    public async Task<IActionResult> CancelBooking(Guid bookingId, [FromQuery] Guid requesterId)
     {
-        public string UserName { get; set; }
-        public long TelegramId { get; set; }
+        var booking = await _context.Bookings.FindAsync(bookingId);
+        if (booking == null) return NotFound();
+
+        // allow cancel if requester is owner or admin (simple check)
+        var requester = await _context.Users.FindAsync(requesterId);
+        if (requester == null) return Forbid();
+
+        if (requester.Role != Role.Admin && booking.UserId != requesterId)
+            return Forbid();
+
+        _context.Bookings.Remove(booking);
+        await _context.SaveChangesAsync();
+        return Ok();
     }
-    [HttpGet("booked")]
-    public async Task<GetBookedDto> GetBooked([FromBody] DateTime time)
+
+    private int ComputeTimespanId(DateTime t)
     {
-        var book = _context.Bookings.FirstOrDefault(b => b.StartAt == time);
-        var user = _context.Users.FirstOrDefault(u => u.Id == book.UserId);
-        return new GetBookedDto()
-        {
-            UserName = user.UserName,
-            TelegramId = user.TelegramId
-        };
+        // timespan index within day (0..95); naive UTC->local not handled
+        return (int)(t.TimeOfDay.TotalMinutes / 15);
     }
-
-    
-    //this is for deleting booking
-    [HttpDelete("delete_booking")]
-    public async Task<IActionResult> DeleteBook([FromBody] Guid RoomId,[FromBody] Guid UserId, [FromBody] DateTime time)
-    {
-        var book = _context.Bookings.FirstOrDefault(b => b.UserId == UserId && b.RoomId == RoomId && b.StartAt == time);
-
-        _context.Bookings.Remove(book);
-        _context.SaveChanges();
-        return Ok(); 
-    }
-    
-    
-    
-
-    
-    
 }
+
+// DTOs
+public record CreateRoomDto(Guid CompanyId, string Name, int Capacity, string Description);
+public record BookDto(Guid UserId, DateTime StartAt, DateTime EndAt);

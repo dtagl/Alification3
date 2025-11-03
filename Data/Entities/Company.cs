@@ -1,15 +1,19 @@
+// File: Data/Entities/Company.cs
+using System.ComponentModel.DataAnnotations;
 
-namespace Alification.Data.Entities;
+namespace Api.Data.Entities;
 
 public class Company
 {
-    public Guid Id { get; set; }
-    public string Name { get; set; }
-    public string PasswordHash { get; set; }
-    public DateTime WorkingStart { get; set; }
-    public DateTime WorkingEnd { get; set; }
-    public ICollection<User> Users { get; set; }
-    public ICollection<Room> Rooms { get; set; }
-    public ICollection<Booking> Bookings { get; set; }
+    public Guid Id { get; set; } = Guid.NewGuid();
 
+    [Required]
+    public string Name { get; set; }
+
+    // hashed password for admin access to company management (basic)
+    [Required]
+    public string PasswordHash { get; set; }
+
+    public ICollection<User> Users { get; set; } = new List<User>();
+    public ICollection<Room> Rooms { get; set; } = new List<Room>();
 }

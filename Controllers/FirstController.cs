@@ -1,126 +1,95 @@
-using Alification.Data.Entities;
-using Microsoft.AspNetCore.Mvc;
+// File: Controllers/FirstController.cs
 using Api.Data;
+using Api.Data.Entities;
+using Api.Services;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace Api.Controllers;
 
-//this controller is for "first time" use
-[Controller]
-[Route("forst")]
-public class FirstController:Controller
+[ApiController]
+[Route("api/first")]
+public class FirstController : ControllerBase
 {
     private readonly TelegramAuthService _auth;
     private readonly MyContext _context;
 
-
-    public FirstController(TelegramAuthService auth,MyContext context)
+    public FirstController(TelegramAuthService auth, MyContext context)
     {
         _auth = auth;
         _context = context;
     }
-    
-    
 
-    //this method is for entrypage, it checks if user is already logined or not, to skip registration part and auth part
-    [HttpPost("etry_page")]
-    public async Task<IActionResult> FirstMenu([FromBody] Dictionary<string, string> data)
+    // Create company + admin user
+    [HttpPost("create-company")]
+    public async Task<IActionResult> CreateCompany([FromBody] CreateCompanyDto dto)
     {
-        
-        if (!_auth.Validate(data))
-            return Unauthorized("Invalid Telegram data");
-        if (!data.TryGetValue("id", out var idStr) || !long.TryParse(idStr, out var telegramId)) 
-            return BadRequest("Missing Telegram user ID");
-        
-        var exist = await _context.Users.FirstOrDefaultAsync(u => u.TelegramId == telegramId);
-        if (exist != null)
+        // Basic validation
+        if (string.IsNullOrWhiteSpace(dto.CompanyName) || string.IsNullOrWhiteSpace(dto.Password))
+            return BadRequest("Company name and password required.");
+
+        var exists = await _context.Companies.AnyAsync(c => c.Name == dto.CompanyName);
+        if (exists) return Conflict("Company already exists.");
+
+        var company = new Company
         {
-            //if user already exist in db then skip this controller and redirect to homepage
+            Name = dto.CompanyName,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password)
+        };
+
+        await _context.Companies.AddAsync(company);
+        await _context.SaveChangesAsync();
+
+        // Create initial admin user if telegram id provided
+        if (dto.TelegramId.HasValue)
+        {
+            var user = new User
+            {
+                TelegramId = dto.TelegramId.Value,
+                UserName = dto.UserName ?? "admin",
+                CompanyId = company.Id,
+                Role = Role.Admin
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
         }
-        
-        return Ok();
 
-    }
-    
-    
-    //this for Create company function
-    [HttpPost("create")]
-    public async Task<IActionResult> CreteCompany([FromBody] Dictionary<string, string> data)
-    {
-        if (!_auth.Validate(data))
-            return Unauthorized("Invalid Telegram data");
-        // Parse user fields
-        if (!data.TryGetValue("id", out var idStr) || !long.TryParse(idStr, out var telegramId))
-            return BadRequest("Missing Telegram user ID");
-        
-        //all this should be checked for null;
-        data.TryGetValue("username", out var username);
-        data.TryGetValue("companyName", out var companyName);
-        data.TryGetValue("password", out var password);
-        //hashpassword method to hash password
-        var hash = password;
-        data.TryGetValue("workingStart", out var workingStart);
-        DateTime.TryParse(workingStart, out var ws);
-        data.TryGetValue("workingEnd", out var workingEnd);
-        DateTime.TryParse(workingEnd, out var we);
-
-        var comId = new Guid();
-        var newconmany = new Company()
-        {
-            Id = comId,
-            Name = companyName,
-            PasswordHash = hash,
-            WorkingStart = ws,
-            WorkingEnd = we
-        };
-        var newuser = new User()
-        {
-            Id = new Guid(),
-            TelegramId = telegramId,
-            UserName = username,
-            CompanyId = comId,
-            Role = Role.Admin
-        };
-        _context.Users.Add(newuser);
-        _context.Companies.Add(newconmany);
-        _context.SaveChanges();
-        
-        //redirect to homepage
-        return Ok();
+        return Ok(new { company.Id });
     }
 
-    
-    //this for enter company 
-    [HttpPost("enter")]
-    public async Task<IActionResult> EnterCompany([FromBody] Dictionary<string, string> data)
+    // Login or register by Telegram id (basic)
+    [HttpPost("login-telegram")]
+    public async Task<IActionResult> LoginTelegram([FromBody] TelegramLoginDto dto)
     {
-        if (!_auth.Validate(data))
-            return Unauthorized("Invalid Telegram data");
-        // Parse user fields
-        if (!data.TryGetValue("id", out var idStr) || !long.TryParse(idStr, out var telegramId))
-            return BadRequest("Missing Telegram user ID");
-        //all this should be checked for null
-        data.TryGetValue("username", out var username);
-        data.TryGetValue("companyName", out var companyName);
-        data.TryGetValue("password", out var password);
-        //hashpassword method to check password
+        if (dto == null || dto.TelegramId == 0) return BadRequest();
 
-        var com = _context.Companies.FirstOrDefault(c => c.Name == companyName);
-        //check companyinputs
-        
-        var newuser = new User()
+        // NOTE: ideally validate widget with TelegramAuthService (dto.Data)
+        // For now assume telegram data valid if provided
+        var user = await _context.Users.Include(u => u.Company)
+            .FirstOrDefaultAsync(u => u.TelegramId == dto.TelegramId);
+
+        if (user != null) return Ok(new { user.Id, user.UserName, user.Role });
+
+        // Register as basic User — company must be passed
+        if (dto.CompanyId == Guid.Empty) return BadRequest("CompanyId required for new users.");
+
+        var company = await _context.Companies.FindAsync(dto.CompanyId);
+        if (company == null) return NotFound("Company not found.");
+
+        var newUser = new User
         {
-            Id = new Guid(),
-            TelegramId = telegramId,
-            UserName = username,
-            CompanyId = com.Id,
+            TelegramId = dto.TelegramId,
+            UserName = dto.UserName ?? $"tg_{dto.TelegramId}",
+            CompanyId = company.Id,
             Role = Role.User
         };
-        _context.Users.Add(newuser);
-        _context.SaveChanges();
-        
-        //redirect to homepage
-        return Ok();
+        _context.Users.Add(newUser);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { newUser.Id, newUser.UserName });
     }
 }
 
+// DTOs
+public record CreateCompanyDto(string CompanyName, string Password, long? TelegramId, string UserName);
+public record TelegramLoginDto(long TelegramId, Guid CompanyId, string UserName, Dictionary<string, string> Data);

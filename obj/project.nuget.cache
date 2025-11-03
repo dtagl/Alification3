@@ -1,9 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "2lzt0a+x/rk=",
+  "dgSpecHash": "L22kxt0X8eQ=",
   "success": true,
   "projectFilePath": "C:\\Users\\denta\\Desktop\\C#course\\Therewillbe demos\\Alification3\\Api\\Api.csproj",
   "expectedPackageFiles": [
+    "C:\\Users\\denta\\.nuget\\packages\\bcrypt.net-next\\4.0.3\\bcrypt.net-next.4.0.3.nupkg.sha512",
     "C:\\Users\\denta\\.nuget\\packages\\humanizer.core\\2.14.1\\humanizer.core.2.14.1.nupkg.sha512",
     "C:\\Users\\denta\\.nuget\\packages\\microsoft.aspnetcore.openapi\\9.0.7\\microsoft.aspnetcore.openapi.9.0.7.nupkg.sha512",
     "C:\\Users\\denta\\.nuget\\packages\\microsoft.bcl.asyncinterfaces\\7.0.0\\microsoft.bcl.asyncinterfaces.7.0.0.nupkg.sha512",
