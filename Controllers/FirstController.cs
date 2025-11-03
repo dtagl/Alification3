@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Api.Controllers;
 
+//this controller is for "first time" use
 [Controller]
 [Route("forst")]
 public class FirstController:Controller
@@ -18,8 +19,11 @@ public class FirstController:Controller
         _auth = auth;
         _context = context;
     }
+    
+    
 
-    [HttpPost("first")]
+    //this method is for entrypage, it checks if user is already logined or not, to skip registration part and auth part
+    [HttpPost("etry_page")]
     public async Task<IActionResult> FirstMenu([FromBody] Dictionary<string, string> data)
     {
         
@@ -38,6 +42,8 @@ public class FirstController:Controller
 
     }
     
+    
+    //this for Create company function
     [HttpPost("create")]
     public async Task<IActionResult> CreteCompany([FromBody] Dictionary<string, string> data)
     {
@@ -79,13 +85,14 @@ public class FirstController:Controller
         _context.Companies.Add(newconmany);
         _context.SaveChanges();
         
-        
-        
         //redirect to homepage
         return Ok();
     }
 
-    public async Task<IActionResult> LoginCompany([FromBody] Dictionary<string, string> data)
+    
+    //this for enter company 
+    [HttpPost("enter")]
+    public async Task<IActionResult> EnterCompany([FromBody] Dictionary<string, string> data)
     {
         if (!_auth.Validate(data))
             return Unauthorized("Invalid Telegram data");

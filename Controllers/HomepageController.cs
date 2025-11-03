@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Api.Controllers;
 
+
+//this controller is for homepage
 [Controller]
 [Route("homepage")]
 public class HomepageController:Controller
@@ -19,6 +21,7 @@ public class HomepageController:Controller
         _context = context;
     }
     
+    //this is for giving list of rooms in company
     [HttpGet("homepage")]
     public async Task<List<Room>> Homepage([FromBody] long userId)
     {
@@ -28,6 +31,8 @@ public class HomepageController:Controller
         return rooms;
     }
 
+    //this is for seeing my booking for all time
+    [HttpGet]
     public async Task<List<Booking>> MyBookings([FromBody]long userId)
     {
         var user = _context.Users.FirstOrDefault(u => u.TelegramId == userId);
@@ -35,6 +40,8 @@ public class HomepageController:Controller
         return bookings;
     }
 
+    //this is for showing rooms that are now available
+    [HttpGet("now_available")]
     public async Task<List<Room>> FreeNow()
     {
         var now = DateTime.Now;
@@ -43,6 +50,9 @@ public class HomepageController:Controller
         return list;
     }
 
+    
+    //this is for showing admin functions
+    [HttpGet("admin_functions")]
     //this controller should return list of available for admin methods
     public async Task<List<string>> AdminFunctions([FromBody]long userId)
     {
